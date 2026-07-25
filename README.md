@@ -2,9 +2,11 @@
 
 Terminal application test harness backed by a pseudo-terminal and an ANSI screen model.
 
-TermHarness scenario documents use the `.th` file extension.
+## Example
 
-Scenario documents use the following shape:
+TermHarness scenarios are plain-text documents that use the `.th` file extension.
+Each scenario defines the command to run, the terminal dimensions, user actions,
+and the expected screen contents.
 
 ```text
 Scenario "cursor_resize"
