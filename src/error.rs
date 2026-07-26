@@ -36,6 +36,26 @@ pub enum Error {
         expected: Vec<String>,
         actual: Vec<String>,
     },
+    #[error(
+        "scenario `{scenario}` step `{step}` did not output {expected:?} within {timeout_ms}ms\noutput tail: {actual:?}"
+    )]
+    OutputTimeout {
+        scenario: String,
+        step: String,
+        expected: String,
+        timeout_ms: u64,
+        actual: String,
+    },
+    #[error(
+        "scenario `{scenario}` step `{step}` did not show a screen line starting with {expected:?} within {timeout_ms}ms\nactual: {actual:?}"
+    )]
+    ScreenLinePrefixTimeout {
+        scenario: String,
+        step: String,
+        expected: String,
+        timeout_ms: u64,
+        actual: Vec<String>,
+    },
     #[error(transparent)]
     ScenarioParse(#[from] crate::scenario::parser::Error),
     #[error("failed to execute scenario action: {source}")]
