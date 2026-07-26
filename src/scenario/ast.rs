@@ -26,12 +26,13 @@ pub struct CursorAst {
     pub col: usize,
 }
 
-/// A single scenario step with an optional action and expected screen snapshot.
+/// A single scenario step with ordered actions and an expected screen snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepAst {
     pub label: String,
-    pub action: Option<ActionAst>,
+    pub actions: Vec<ActionAst>,
     pub settle_ms: u64,
+    pub expect_timeout_ms: u64,
     pub expect: Vec<String>,
 }
 
@@ -39,6 +40,8 @@ pub struct StepAst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionAst {
     Input(InputAst),
+    WaitPtyOutputContains { text: String, timeout_ms: u64 },
+    WaitScreenLineStartsWith { text: String, timeout_ms: u64 },
     Resize(TerminalAst),
 }
 

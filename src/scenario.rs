@@ -18,8 +18,9 @@ pub mod parser;
 pub type ActionResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub type Action = Arc<dyn Fn(&mut Session) -> ActionResult + Send + Sync>;
 
-const SCREEN_MATCH_GRACE: Duration = Duration::from_secs(2);
 const SCREEN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const OUTPUT_ERROR_TAIL_BYTES: usize = 500;
 
 /// Represent a test scenario consisting of multiple steps,
 /// where each step has a label, a settle duration,
@@ -83,14 +84,37 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
     let mut records = Vec::with_capacity(scenario.steps.len());
 
     for step in &scenario.steps {
-        match &step.action {
-            Some(ActionAst::Input(input)) => write_input(session, input)?,
-            Some(ActionAst::Resize(size)) => session.resize(size.rows, size.cols)?,
-            None => {}
+        for action in &step.actions {
+            match action {
+                ActionAst::Input(input) => write_input(session, input)?,
+                ActionAst::WaitPtyOutputContains { text, timeout_ms } => {
+                    wait_for_pty_output_contains(
+                        session,
+                        text,
+                        Duration::from_millis(*timeout_ms),
+                        &scenario.name,
+                        &step.label,
+                    )?
+                }
+                ActionAst::WaitScreenLineStartsWith { text, timeout_ms } => {
+                    wait_for_screen_line_starts_with(
+                        session,
+                        text,
+                        Duration::from_millis(*timeout_ms),
+                        &scenario.name,
+                        &step.label,
+                    )?
+                }
+                ActionAst::Resize(size) => session.resize(size.rows, size.cols)?,
+            }
         }
         std::thread::sleep(Duration::from_millis(step.settle_ms));
 
-        let actual = wait_for_screen(session, &step.expect);
+        let actual = wait_for_screen(
+            session,
+            &step.expect,
+            Duration::from_millis(step.expect_timeout_ms),
+        );
         if actual != step.expect {
             return Err(Error::ScreenMismatch {
                 scenario: scenario.name.clone(),
@@ -109,14 +133,73 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
     Ok(Run { records })
 }
 
-fn wait_for_screen(session: &Session, expected: &[String]) -> Vec<String> {
-    let deadline = Instant::now() + SCREEN_MATCH_GRACE;
+fn wait_for_screen(session: &Session, expected: &[String], timeout: Duration) -> Vec<String> {
+    let deadline = Instant::now() + timeout;
     loop {
         let actual = session.screen_snapshot();
         if actual == expected || Instant::now() >= deadline {
             return actual;
         }
         std::thread::sleep(SCREEN_POLL_INTERVAL);
+    }
+}
+
+fn wait_for_pty_output_contains(
+    session: &Session,
+    expected: &str,
+    timeout: Duration,
+    scenario: &str,
+    step: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let expected_bytes = expected.as_bytes();
+
+    loop {
+        let output = session.output();
+        if output
+            .windows(expected_bytes.len())
+            .any(|window| window == expected_bytes)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let tail = &output[output.len().saturating_sub(OUTPUT_ERROR_TAIL_BYTES)..];
+            return Err(Error::PtyOutputContainsTimeout {
+                scenario: scenario.to_string(),
+                step: step.to_string(),
+                expected: expected.to_string(),
+                timeout_ms: timeout.as_millis() as u64,
+                actual: String::from_utf8_lossy(tail).into_owned(),
+            });
+        }
+        std::thread::sleep(OUTPUT_POLL_INTERVAL);
+    }
+}
+
+fn wait_for_screen_line_starts_with(
+    session: &Session,
+    expected: &str,
+    timeout: Duration,
+    scenario: &str,
+    step: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let screen = session.screen_snapshot();
+        if screen.iter().any(|line| line.starts_with(expected)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::ScreenLineStartsWithTimeout {
+                scenario: scenario.to_string(),
+                step: step.to_string(),
+                expected: expected.to_string(),
+                timeout_ms: timeout.as_millis() as u64,
+                actual: screen,
+            });
+        }
+        std::thread::sleep(OUTPUT_POLL_INTERVAL);
     }
 }
 

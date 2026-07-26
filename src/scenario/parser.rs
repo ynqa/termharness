@@ -6,6 +6,7 @@ use unicode_width::UnicodeWidthStr;
 use super::ast::{ActionAst, CursorAst, InputAst, KeyAst, ScenarioAst, StepAst, TerminalAst};
 
 pub type Result<T> = std::result::Result<T, Error>;
+const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -216,28 +217,44 @@ impl<'a> Parser<'a> {
             }
 
             let label = self.parse_named_string("Step")?;
-            let action = match self.peek_line() {
-                Some(line) if line.starts_with("Input ") => {
-                    Some(ActionAst::Input(self.parse_input()?))
-                }
-                Some(line) if line.starts_with("Resize ") => {
-                    terminal = self.parse_terminal_declaration("Resize")?;
-                    Some(ActionAst::Resize(terminal))
-                }
-                _ => None,
-            };
+            let actions = self.parse_actions(&mut terminal)?;
             let settle_ms = self.parse_settle()?;
-            let expect = self.parse_expect(terminal)?;
+            let (expect_timeout_ms, expect) = self.parse_expect(terminal)?;
 
             steps.push(StepAst {
                 label,
-                action,
+                actions,
                 settle_ms,
+                expect_timeout_ms,
                 expect,
             });
         }
 
         Ok(steps)
+    }
+
+    fn parse_actions(&mut self, terminal: &mut TerminalAst) -> Result<Vec<ActionAst>> {
+        let mut actions = Vec::new();
+
+        loop {
+            let action = match self.peek_line() {
+                Some(line) if line.starts_with("Input ") => ActionAst::Input(self.parse_input()?),
+                Some(line) if line.starts_with("WaitPtyOutputContains ") => {
+                    self.parse_wait_pty_output_contains()?
+                }
+                Some(line) if line.starts_with("WaitScreenLineStartsWith ") => {
+                    self.parse_wait_screen_line_starts_with()?
+                }
+                Some(line) if line.starts_with("Resize ") => {
+                    *terminal = self.parse_terminal_declaration("Resize")?;
+                    ActionAst::Resize(*terminal)
+                }
+                _ => break,
+            };
+            actions.push(action);
+        }
+
+        Ok(actions)
     }
 
     fn parse_input(&mut self) -> Result<InputAst> {
@@ -284,6 +301,78 @@ impl<'a> Parser<'a> {
         Ok(InputAst::Key { key, count })
     }
 
+    fn parse_wait_pty_output_contains(&mut self) -> Result<ActionAst> {
+        let line = self.next_line()?;
+        let value = line.strip_prefix("WaitPtyOutputContains ").ok_or_else(|| {
+            self.error_at_current_line("expected `WaitPtyOutputContains` declaration")
+        })?;
+        let (text, rest) = Self::parse_leading_quoted_string(value)
+            .ok_or_else(|| self.error_at_current_line("expected quoted output text"))?;
+        if text.is_empty() {
+            return Err(self.error_at_current_line("wait output text must not be empty"));
+        }
+
+        let mut parts = rest.split_whitespace();
+        if parts.next() != Some("timeout") {
+            return Err(
+                self.error_at_current_line("expected `timeout <milliseconds>ms` after output text")
+            );
+        }
+        let timeout_ms = parts
+            .next()
+            .and_then(|value| value.strip_suffix("ms"))
+            .ok_or_else(|| self.error_at_current_line("expected output timeout in milliseconds"))?
+            .parse::<u64>()
+            .map_err(|_| self.error_at_current_line("expected output timeout to be an integer"))?;
+        if parts.next().is_some() {
+            return Err(
+                self.error_at_current_line("unexpected trailing tokens in `WaitPtyOutputContains`")
+            );
+        }
+
+        Ok(ActionAst::WaitPtyOutputContains {
+            text: text.to_string(),
+            timeout_ms,
+        })
+    }
+
+    fn parse_wait_screen_line_starts_with(&mut self) -> Result<ActionAst> {
+        let line = self.next_line()?;
+        let value = line
+            .strip_prefix("WaitScreenLineStartsWith ")
+            .ok_or_else(|| {
+                self.error_at_current_line("expected `WaitScreenLineStartsWith` declaration")
+            })?;
+        let (text, rest) = Self::parse_leading_quoted_string(value)
+            .ok_or_else(|| self.error_at_current_line("expected quoted screen line prefix"))?;
+        if text.is_empty() {
+            return Err(self.error_at_current_line("screen line prefix must not be empty"));
+        }
+
+        let mut parts = rest.split_whitespace();
+        if parts.next() != Some("timeout") {
+            return Err(self.error_at_current_line(
+                "expected `timeout <milliseconds>ms` after screen line prefix",
+            ));
+        }
+        let timeout_ms = parts
+            .next()
+            .and_then(|value| value.strip_suffix("ms"))
+            .ok_or_else(|| self.error_at_current_line("expected screen timeout in milliseconds"))?
+            .parse::<u64>()
+            .map_err(|_| self.error_at_current_line("expected screen timeout to be an integer"))?;
+        if parts.next().is_some() {
+            return Err(self.error_at_current_line(
+                "unexpected trailing tokens in `WaitScreenLineStartsWith`",
+            ));
+        }
+
+        Ok(ActionAst::WaitScreenLineStartsWith {
+            text: text.to_string(),
+            timeout_ms,
+        })
+    }
+
     fn parse_settle(&mut self) -> Result<u64> {
         let line = self.next_line()?;
         let value = line
@@ -295,11 +384,21 @@ impl<'a> Parser<'a> {
             .map_err(|_| self.error_at_current_line("expected settle duration to be an integer"))
     }
 
-    fn parse_expect(&mut self, terminal: TerminalAst) -> Result<Vec<String>> {
+    fn parse_expect(&mut self, terminal: TerminalAst) -> Result<(u64, Vec<String>)> {
         let line = self.next_line()?;
-        if line != "Expect:" {
-            return Err(self.error_at_current_line("expected `Expect:`"));
-        }
+        let timeout_ms = if line == "Expect:" {
+            DEFAULT_EXPECT_TIMEOUT_MS
+        } else {
+            line.strip_prefix("Expect timeout ")
+                .and_then(|value| value.strip_suffix("ms:"))
+                .ok_or_else(|| {
+                    self.error_at_current_line(
+                        "expected `Expect:` or `Expect timeout <milliseconds>ms:`",
+                    )
+                })?
+                .parse::<u64>()
+                .map_err(|_| self.error_at_current_line("expected timeout to be an integer"))?
+        };
 
         let mut expected = Vec::with_capacity(terminal.rows);
         for row in 0..terminal.rows {
@@ -332,7 +431,7 @@ impl<'a> Parser<'a> {
             expected.push(content.replace('·', " "));
         }
 
-        Ok(expected)
+        Ok((timeout_ms, expected))
     }
 
     fn peek_line(&mut self) -> Option<&'a str> {
@@ -351,6 +450,13 @@ impl<'a> Parser<'a> {
             return None;
         }
         Some(content.to_string())
+    }
+
+    fn parse_leading_quoted_string(input: &str) -> Option<(&str, &str)> {
+        let input = input.strip_prefix('"')?;
+        let closing_quote = input.find('"')?;
+        let (content, rest) = input.split_at(closing_quote);
+        Some((content, rest.strip_prefix('"')?.trim_start()))
     }
 
     fn error_at_current_line(&mut self, message: impl Into<String>) -> Error {
@@ -451,25 +557,70 @@ mod tests {
 
             assert_eq!(scenario.steps.len(), 4);
             assert_eq!(scenario.cursor, CursorAst { row: 2, col: 1 });
-            assert_eq!(scenario.steps[0].action, None);
+            assert!(scenario.steps[0].actions.is_empty());
             assert_eq!(scenario.steps[0].settle_ms, 300);
+            assert_eq!(scenario.steps[0].expect_timeout_ms, 2_000);
             assert_eq!(
-                scenario.steps[1].action,
-                Some(ActionAst::Input(InputAst::Text("hi".to_string())))
+                scenario.steps[1].actions,
+                vec![ActionAst::Input(InputAst::Text("hi".to_string()))]
             );
             assert_eq!(
-                scenario.steps[2].action,
-                Some(ActionAst::Input(InputAst::Key {
+                scenario.steps[2].actions,
+                vec![ActionAst::Input(InputAst::Key {
                     key: KeyAst::Left,
                     count: 2,
-                }))
+                })]
             );
             assert_eq!(
-                scenario.steps[3].action,
-                Some(ActionAst::Resize(TerminalAst { rows: 2, cols: 4 }))
+                scenario.steps[3].actions,
+                vec![ActionAst::Resize(TerminalAst { rows: 2, cols: 4 })]
             );
             assert_eq!(scenario.steps[1].expect, vec!["     ", "❯❯ hi"]);
             assert_eq!(scenario.steps[3].expect, vec!["    ", "❯❯ h"]);
+        }
+
+        #[test]
+        fn parses_multiple_actions_and_expect_timeout() {
+            let input = indoc! {r#"
+                Scenario "action sequence"
+                Command "true"
+                Terminal rows 1 cols 4
+
+                Step "race output and resize"
+                WaitScreenLineStartsWith "❯❯" timeout 1000ms
+                Input "go"
+                WaitPtyOutputContains "ready" timeout 1000ms
+                Resize rows 1 cols 5
+                Resize rows 1 cols 6
+                Settle 300ms
+                Expect timeout 0ms:
+                  r00 |······|
+            "#};
+
+            let scenario = Parser::new(input)
+                .parse_scenario()
+                .expect("action sequence should parse");
+            let step = &scenario.steps[0];
+
+            assert_eq!(
+                step.actions,
+                vec![
+                    ActionAst::WaitScreenLineStartsWith {
+                        text: "❯❯".to_string(),
+                        timeout_ms: 1_000,
+                    },
+                    ActionAst::Input(InputAst::Text("go".to_string())),
+                    ActionAst::WaitPtyOutputContains {
+                        text: "ready".to_string(),
+                        timeout_ms: 1_000,
+                    },
+                    ActionAst::Resize(TerminalAst { rows: 1, cols: 5 }),
+                    ActionAst::Resize(TerminalAst { rows: 1, cols: 6 }),
+                ]
+            );
+            assert_eq!(step.settle_ms, 300);
+            assert_eq!(step.expect_timeout_ms, 0);
+            assert_eq!(step.expect, vec!["      "]);
         }
 
         #[test]
@@ -494,11 +645,11 @@ mod tests {
             assert_eq!(scenario.cursor, CursorAst { row: 10, col: 1 });
             assert_eq!(scenario.steps.len(), 4);
             assert_eq!(
-                scenario.steps[2].action,
-                Some(ActionAst::Input(InputAst::Key {
+                scenario.steps[2].actions,
+                vec![ActionAst::Input(InputAst::Key {
                     key: KeyAst::Left,
                     count: 36,
-                }))
+                })]
             );
         }
     }
