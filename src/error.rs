@@ -39,7 +39,7 @@ pub enum Error {
     #[error(
         "scenario `{scenario}` step `{step}` did not output {expected:?} within {timeout_ms}ms\noutput tail: {actual:?}"
     )]
-    OutputTimeout {
+    PtyOutputContainsTimeout {
         scenario: String,
         step: String,
         expected: String,
@@ -49,7 +49,7 @@ pub enum Error {
     #[error(
         "scenario `{scenario}` step `{step}` did not show a screen line starting with {expected:?} within {timeout_ms}ms\nactual: {actual:?}"
     )]
-    ScreenLinePrefixTimeout {
+    ScreenLineStartsWithTimeout {
         scenario: String,
         step: String,
         expected: String,

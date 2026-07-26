@@ -87,15 +87,17 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
         for action in &step.actions {
             match action {
                 ActionAst::Input(input) => write_input(session, input)?,
-                ActionAst::WaitOutput { text, timeout_ms } => wait_for_output(
-                    session,
-                    text,
-                    Duration::from_millis(*timeout_ms),
-                    &scenario.name,
-                    &step.label,
-                )?,
-                ActionAst::WaitScreenLinePrefix { text, timeout_ms } => {
-                    wait_for_screen_line_prefix(
+                ActionAst::WaitPtyOutputContains { text, timeout_ms } => {
+                    wait_for_pty_output_contains(
+                        session,
+                        text,
+                        Duration::from_millis(*timeout_ms),
+                        &scenario.name,
+                        &step.label,
+                    )?
+                }
+                ActionAst::WaitScreenLineStartsWith { text, timeout_ms } => {
+                    wait_for_screen_line_starts_with(
                         session,
                         text,
                         Duration::from_millis(*timeout_ms),
@@ -142,7 +144,7 @@ fn wait_for_screen(session: &Session, expected: &[String], timeout: Duration) ->
     }
 }
 
-fn wait_for_output(
+fn wait_for_pty_output_contains(
     session: &Session,
     expected: &str,
     timeout: Duration,
@@ -162,7 +164,7 @@ fn wait_for_output(
         }
         if Instant::now() >= deadline {
             let tail = &output[output.len().saturating_sub(OUTPUT_ERROR_TAIL_BYTES)..];
-            return Err(Error::OutputTimeout {
+            return Err(Error::PtyOutputContainsTimeout {
                 scenario: scenario.to_string(),
                 step: step.to_string(),
                 expected: expected.to_string(),
@@ -174,7 +176,7 @@ fn wait_for_output(
     }
 }
 
-fn wait_for_screen_line_prefix(
+fn wait_for_screen_line_starts_with(
     session: &Session,
     expected: &str,
     timeout: Duration,
@@ -189,7 +191,7 @@ fn wait_for_screen_line_prefix(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(Error::ScreenLinePrefixTimeout {
+            return Err(Error::ScreenLineStartsWithTimeout {
                 scenario: scenario.to_string(),
                 step: step.to_string(),
                 expected: expected.to_string(),

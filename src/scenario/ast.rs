@@ -40,8 +40,8 @@ pub struct StepAst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionAst {
     Input(InputAst),
-    WaitOutput { text: String, timeout_ms: u64 },
-    WaitScreenLinePrefix { text: String, timeout_ms: u64 },
+    WaitPtyOutputContains { text: String, timeout_ms: u64 },
+    WaitScreenLineStartsWith { text: String, timeout_ms: u64 },
     Resize(TerminalAst),
 }
 
