@@ -37,8 +37,8 @@ Expect:
 | `Step "label"` | Start a step. | Follow with zero or more actions, then `Settle` and `Expect`. Actions run in the order written without implicit waits. |
 | `Input "text"` | Send text to the application. | Does not append Enter. |
 | `Input <key> [count]` | Send a special key one or more times. | Keys: `left`, `right`, `up`, `down`, `enter`, `backspace`, `tab`, `escape`. Count defaults to 1; range: 1–65535. |
-| `WaitPtyOutputContains "text" timeout <ms>ms` | Wait until raw PTY output contains the text. | Text must be nonempty; timeout is required. Polls every millisecond and fails when the timeout expires. |
-| `WaitScreenLineStartsWith "text" timeout <ms>ms` | Wait until a visible screen line starts with the text. | Text must be nonempty; timeout is required. Inspects the current viewport, polling every millisecond; fails when the timeout expires. |
+| `WaitBackendLineStartsWith "text" timeout <ms>ms` | Wait until a Backend line (raw PTY output split at LF bytes) starts with the text. | Text must be nonempty; timeout is required. Includes the unfinished last line; preserves control sequences. Polls every millisecond and fails when the timeout expires. |
+| `WaitFrontendLineStartsWith "text" timeout <ms>ms` | Wait until a visible Frontend line (the emulated terminal screen) starts with the text. | Text must be nonempty; timeout is required. Inspects the current viewport, polling every millisecond; fails when the timeout expires. |
 | `Resize rows <rows> cols <cols>` | Resize the terminal. | Each dimension is 1–65535. Subsequent expectations use the new dimensions. |
 | `Scroll up <lines>` | Move the viewport toward older output. | Line count is required; range: 1–65535. Stops at the oldest retained line. |
 | `Scroll down <lines>` | Move the viewport toward the live screen. | Line count is required; range: 1–65535. Stops at the live screen. |

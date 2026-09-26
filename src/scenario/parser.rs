@@ -241,11 +241,11 @@ impl<'a> Parser<'a> {
         loop {
             let action = match self.peek_line() {
                 Some(line) if line.starts_with("Input ") => ActionAst::Input(self.parse_input()?),
-                Some(line) if line.starts_with("WaitPtyOutputContains ") => {
-                    self.parse_wait_pty_output_contains()?
+                Some(line) if line.starts_with("WaitBackendLineStartsWith ") => {
+                    self.parse_wait_backend_line_starts_with()?
                 }
-                Some(line) if line.starts_with("WaitScreenLineStartsWith ") => {
-                    self.parse_wait_screen_line_starts_with()?
+                Some(line) if line.starts_with("WaitFrontendLineStartsWith ") => {
+                    self.parse_wait_frontend_line_starts_with()?
                 }
                 Some(line) if line.starts_with("Resize ") => {
                     *terminal = self.parse_terminal_declaration("Resize")?;
@@ -329,11 +329,13 @@ impl<'a> Parser<'a> {
         Ok(InputAst::Key { key, count })
     }
 
-    fn parse_wait_pty_output_contains(&mut self) -> Result<ActionAst> {
+    fn parse_wait_backend_line_starts_with(&mut self) -> Result<ActionAst> {
         let line = self.next_line()?;
-        let value = line.strip_prefix("WaitPtyOutputContains ").ok_or_else(|| {
-            self.error_at_current_line("expected `WaitPtyOutputContains` declaration")
-        })?;
+        let value = line
+            .strip_prefix("WaitBackendLineStartsWith ")
+            .ok_or_else(|| {
+                self.error_at_current_line("expected `WaitBackendLineStartsWith` declaration")
+            })?;
         let (text, rest) = Self::parse_leading_quoted_string(value)
             .ok_or_else(|| self.error_at_current_line("expected quoted output text"))?;
         if text.is_empty() {
@@ -353,23 +355,23 @@ impl<'a> Parser<'a> {
             .parse::<u64>()
             .map_err(|_| self.error_at_current_line("expected output timeout to be an integer"))?;
         if parts.next().is_some() {
-            return Err(
-                self.error_at_current_line("unexpected trailing tokens in `WaitPtyOutputContains`")
-            );
+            return Err(self.error_at_current_line(
+                "unexpected trailing tokens in `WaitBackendLineStartsWith`",
+            ));
         }
 
-        Ok(ActionAst::WaitPtyOutputContains {
+        Ok(ActionAst::WaitBackendLineStartsWith {
             text: text.to_string(),
             timeout_ms,
         })
     }
 
-    fn parse_wait_screen_line_starts_with(&mut self) -> Result<ActionAst> {
+    fn parse_wait_frontend_line_starts_with(&mut self) -> Result<ActionAst> {
         let line = self.next_line()?;
         let value = line
-            .strip_prefix("WaitScreenLineStartsWith ")
+            .strip_prefix("WaitFrontendLineStartsWith ")
             .ok_or_else(|| {
-                self.error_at_current_line("expected `WaitScreenLineStartsWith` declaration")
+                self.error_at_current_line("expected `WaitFrontendLineStartsWith` declaration")
             })?;
         let (text, rest) = Self::parse_leading_quoted_string(value)
             .ok_or_else(|| self.error_at_current_line("expected quoted screen line prefix"))?;
@@ -391,11 +393,11 @@ impl<'a> Parser<'a> {
             .map_err(|_| self.error_at_current_line("expected screen timeout to be an integer"))?;
         if parts.next().is_some() {
             return Err(self.error_at_current_line(
-                "unexpected trailing tokens in `WaitScreenLineStartsWith`",
+                "unexpected trailing tokens in `WaitFrontendLineStartsWith`",
             ));
         }
 
-        Ok(ActionAst::WaitScreenLineStartsWith {
+        Ok(ActionAst::WaitFrontendLineStartsWith {
             text: text.to_string(),
             timeout_ms,
         })
@@ -654,9 +656,9 @@ mod tests {
                 Terminal rows 1 cols 4
 
                 Step "race output and resize"
-                WaitScreenLineStartsWith "❯❯" timeout 1000ms
+                WaitFrontendLineStartsWith "❯❯" timeout 1000ms
                 Input "go"
-                WaitPtyOutputContains "ready" timeout 1000ms
+                WaitBackendLineStartsWith "ready" timeout 1000ms
                 Resize rows 1 cols 5
                 Resize rows 1 cols 6
                 Settle 300ms
@@ -672,12 +674,12 @@ mod tests {
             assert_eq!(
                 step.actions,
                 vec![
-                    ActionAst::WaitScreenLineStartsWith {
+                    ActionAst::WaitFrontendLineStartsWith {
                         text: "❯❯".to_string(),
                         timeout_ms: 1_000,
                     },
                     ActionAst::Input(InputAst::Text("go".to_string())),
-                    ActionAst::WaitPtyOutputContains {
+                    ActionAst::WaitBackendLineStartsWith {
                         text: "ready".to_string(),
                         timeout_ms: 1_000,
                     },

@@ -40,11 +40,13 @@ pub struct StepAst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionAst {
     Input(InputAst),
-    WaitPtyOutputContains {
+    /// Wait for a line prefix in raw PTY output, splitting lines at LF bytes.
+    WaitBackendLineStartsWith {
         text: String,
         timeout_ms: u64,
     },
-    WaitScreenLineStartsWith {
+    /// Wait for a line prefix in the emulated terminal viewport.
+    WaitFrontendLineStartsWith {
         text: String,
         timeout_ms: u64,
     },

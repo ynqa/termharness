@@ -87,8 +87,8 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
         for action in &step.actions {
             match action {
                 ActionAst::Input(input) => write_input(session, input)?,
-                ActionAst::WaitPtyOutputContains { text, timeout_ms } => {
-                    wait_for_pty_output_contains(
+                ActionAst::WaitBackendLineStartsWith { text, timeout_ms } => {
+                    wait_for_backend_line_starts_with(
                         session,
                         text,
                         Duration::from_millis(*timeout_ms),
@@ -96,8 +96,8 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
                         &step.label,
                     )?
                 }
-                ActionAst::WaitScreenLineStartsWith { text, timeout_ms } => {
-                    wait_for_screen_line_starts_with(
+                ActionAst::WaitFrontendLineStartsWith { text, timeout_ms } => {
+                    wait_for_frontend_line_starts_with(
                         session,
                         text,
                         Duration::from_millis(*timeout_ms),
@@ -148,7 +148,7 @@ fn wait_for_screen(session: &Session, expected: &[String], timeout: Duration) ->
     }
 }
 
-fn wait_for_pty_output_contains(
+fn wait_for_backend_line_starts_with(
     session: &Session,
     expected: &str,
     timeout: Duration,
@@ -161,14 +161,14 @@ fn wait_for_pty_output_contains(
     loop {
         let output = session.output();
         if output
-            .windows(expected_bytes.len())
-            .any(|window| window == expected_bytes)
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(expected_bytes))
         {
             return Ok(());
         }
         if Instant::now() >= deadline {
             let tail = &output[output.len().saturating_sub(OUTPUT_ERROR_TAIL_BYTES)..];
-            return Err(Error::PtyOutputContainsTimeout {
+            return Err(Error::BackendLineStartsWithTimeout {
                 scenario: scenario.to_string(),
                 step: step.to_string(),
                 expected: expected.to_string(),
@@ -180,7 +180,7 @@ fn wait_for_pty_output_contains(
     }
 }
 
-fn wait_for_screen_line_starts_with(
+fn wait_for_frontend_line_starts_with(
     session: &Session,
     expected: &str,
     timeout: Duration,
@@ -195,7 +195,7 @@ fn wait_for_screen_line_starts_with(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(Error::ScreenLineStartsWithTimeout {
+            return Err(Error::FrontendLineStartsWithTimeout {
                 scenario: scenario.to_string(),
                 step: step.to_string(),
                 expected: expected.to_string(),

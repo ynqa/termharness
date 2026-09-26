@@ -6,7 +6,7 @@ Terminal rows 3 cols 5
 Cursor row 1 col 1
 
 Step "wait for output to overflow the screen"
-WaitScreenLineStartsWith "5" timeout 1000ms
+WaitFrontendLineStartsWith "5" timeout 1000ms
 Settle 0ms
 Expect:
   r00 |3····|
@@ -47,7 +47,7 @@ Expect:
 
 Step "only explicit input reaches the application"
 Input "x"
-WaitScreenLineStartsWith "got:x" timeout 1000ms
+WaitFrontendLineStartsWith "got:x" timeout 1000ms
 Settle 0ms
 Expect:
   r00 |4····|
