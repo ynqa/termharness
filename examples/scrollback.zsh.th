@@ -1,0 +1,55 @@
+Scenario "scrollback"
+Command "zsh"
+Arg "-fc"
+Arg "stty -echo -icanon min 1 time 0; printf '1\n2\n3\n4\n5'; read -k 1 value; printf '\ngot:%s' $value"
+Terminal rows 3 cols 5
+Cursor row 1 col 1
+
+Step "wait for output to overflow the screen"
+WaitScreenLineStartsWith "5" timeout 1000ms
+Settle 0ms
+Expect:
+  r00 |3····|
+  r01 |4····|
+  r02 |5····|
+
+Step "scroll up one line"
+Scroll up 1
+Settle 0ms
+Expect:
+  r00 |2····|
+  r01 |3····|
+  r02 |4····|
+
+Step "stop at the oldest retained line"
+Scroll up 100
+Settle 0ms
+Expect:
+  r00 |1····|
+  r01 |2····|
+  r02 |3····|
+
+Step "scroll down one line"
+Scroll down 1
+Settle 0ms
+Expect:
+  r00 |2····|
+  r01 |3····|
+  r02 |4····|
+
+Step "return to the live screen"
+Scroll down 100
+Settle 0ms
+Expect:
+  r00 |3····|
+  r01 |4····|
+  r02 |5····|
+
+Step "only explicit input reaches the application"
+Input "x"
+WaitScreenLineStartsWith "got:x" timeout 1000ms
+Settle 0ms
+Expect:
+  r00 |4····|
+  r01 |5····|
+  r02 |got:x|

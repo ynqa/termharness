@@ -7,7 +7,7 @@ use portable_pty::CommandBuilder;
 
 use crate::{
     error::{Error, Result},
-    scenario::ast::{ActionAst, InputAst, KeyAst, ScenarioAst},
+    scenario::ast::{ActionAst, InputAst, KeyAst, ScenarioAst, ScrollDirection},
     session::Session,
 };
 
@@ -106,6 +106,10 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
                     )?
                 }
                 ActionAst::Resize(size) => session.resize(size.rows, size.cols)?,
+                ActionAst::Scroll { direction, lines } => match direction {
+                    ScrollDirection::Up => session.scroll_up(*lines),
+                    ScrollDirection::Down => session.scroll_down(*lines),
+                },
             }
         }
         std::thread::sleep(Duration::from_millis(step.settle_ms));

@@ -73,3 +73,28 @@ one-millisecond poll interval and fail when their declared timeout expires.
 then compares the screen. Plain `Expect:` retains the default two-second match
 grace period. `Expect timeout <milliseconds>ms:` overrides it; use
 `Expect timeout 0ms:` for an immediate assertion after `Settle`.
+
+## Scrollback
+
+Use `Scroll up <lines>` to view older output and `Scroll down <lines>` to move
+back toward the live screen. The line count is required and must be an integer
+from 1 to 65535. Scrolling stops at the oldest retained line or the live screen.
+
+```text
+Step "inspect older output"
+Scroll up 10
+Settle 0ms
+Expect:
+  r00 |1····|
+  r01 |2····|
+  r02 |3····|
+```
+
+`Scroll` changes only the emulated terminal's viewport: it does not send keys
+or mouse events to the application, move its cursor, or change terminal contents.
+`Expect` and `WaitScreenLineStartsWith` inspect the scrolled viewport. Like other
+actions, scrolling does not wait for output; use a screen wait before scrolling
+when the application is still producing the history you want to inspect.
+
+See [the complete scrollback scenario](./examples/scrollback.zsh.th) for an
+example that scrolls in both directions and checks the history boundaries.

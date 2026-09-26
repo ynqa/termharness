@@ -175,7 +175,25 @@ impl Session {
         Ok(())
     }
 
-    /// Takes a snapshot of the current screen contents.
+    /// Scroll toward older output without sending input to the child process.
+    /// Stops at the oldest retained line.
+    pub fn scroll_up(&self, lines: u16) {
+        self.screen
+            .lock()
+            .expect("failed to lock screen")
+            .scroll_up(lines);
+    }
+
+    /// Scroll toward live output without sending input to the child process.
+    /// Stops at the live screen.
+    pub fn scroll_down(&self, lines: u16) {
+        self.screen
+            .lock()
+            .expect("failed to lock screen")
+            .scroll_down(lines);
+    }
+
+    /// Takes a snapshot of the current viewport, including scrolled-back output.
     /// Each string in the returned vector represents a line on the screen.
     pub fn screen_snapshot(&self) -> Vec<String> {
         self.screen

@@ -40,9 +40,26 @@ pub struct StepAst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionAst {
     Input(InputAst),
-    WaitPtyOutputContains { text: String, timeout_ms: u64 },
-    WaitScreenLineStartsWith { text: String, timeout_ms: u64 },
+    WaitPtyOutputContains {
+        text: String,
+        timeout_ms: u64,
+    },
+    WaitScreenLineStartsWith {
+        text: String,
+        timeout_ms: u64,
+    },
     Resize(TerminalAst),
+    Scroll {
+        direction: ScrollDirection,
+        lines: u16,
+    },
+}
+
+/// Direction of viewport movement through terminal scrollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDirection {
+    Up,
+    Down,
 }
 
 /// User input represented in the scenario document.

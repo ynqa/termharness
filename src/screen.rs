@@ -1,6 +1,7 @@
 use alacritty_terminal::{
     Term,
     event::VoidListener,
+    grid::Scroll,
     index::{Column, Line, Point},
     term::{Config, cell::Flags, test::TermSize},
     vte::ansi::Processor,
@@ -75,7 +76,22 @@ impl Screen {
         self.terminal.resize(size);
     }
 
-    /// Create a snapshot of the current visible screen content.
+    /// Move the viewport toward older output, clamping at the oldest retained line.
+    /// This does not move the application's cursor or change terminal contents.
+    pub fn scroll_up(&mut self, lines: u16) {
+        self.terminal
+            .scroll_display(Scroll::Delta(i32::from(lines)));
+    }
+
+    /// Move the viewport toward live output, clamping at the live screen.
+    /// This does not move the application's cursor or change terminal contents.
+    pub fn scroll_down(&mut self, lines: u16) {
+        self.terminal
+            .scroll_display(Scroll::Delta(-i32::from(lines)));
+    }
+
+    /// Create a snapshot of the current visible screen content, including scrollback
+    /// when the viewport has been scrolled.
     pub fn snapshot(&self) -> Vec<String> {
         let mut lines = Vec::new();
         let mut current_line = None;
@@ -128,6 +144,57 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod scroll {
+        use super::*;
+
+        #[test]
+        fn moves_in_both_directions_and_clamps_without_moving_the_cursor() {
+            let mut screen = Screen::new(3, 3);
+            screen.process(b"1\r\n2\r\n3\r\n4\r\n5");
+            let cursor = screen.cursor_position();
+            assert_eq!(screen.snapshot(), vec!["3  ", "4  ", "5  "]);
+
+            screen.scroll_up(1);
+            assert_eq!(screen.snapshot(), vec!["2  ", "3  ", "4  "]);
+            assert_eq!(screen.cursor_position(), cursor);
+
+            screen.scroll_up(u16::MAX);
+            assert_eq!(screen.snapshot(), vec!["1  ", "2  ", "3  "]);
+            assert_eq!(screen.cursor_position(), cursor);
+
+            screen.scroll_down(1);
+            assert_eq!(screen.snapshot(), vec!["2  ", "3  ", "4  "]);
+            assert_eq!(screen.cursor_position(), cursor);
+
+            screen.scroll_down(u16::MAX);
+            assert_eq!(screen.snapshot(), vec!["3  ", "4  ", "5  "]);
+            assert_eq!(screen.cursor_position(), cursor);
+        }
+
+        #[test]
+        fn keeps_the_viewport_when_more_output_arrives() {
+            let mut screen = Screen::new(3, 3);
+            screen.process(b"1\r\n2\r\n3\r\n4\r\n5");
+            screen.scroll_up(2);
+            screen.process(b"\r\n6");
+            assert_eq!(screen.snapshot(), vec!["1  ", "2  ", "3  "]);
+
+            screen.scroll_down(u16::MAX);
+            assert_eq!(screen.snapshot(), vec!["4  ", "5  ", "6  "]);
+        }
+
+        #[test]
+        fn does_not_scroll_without_history() {
+            let mut screen = Screen::new(2, 3);
+            screen.process(b"abc");
+            let before = screen.snapshot();
+            screen.scroll_up(u16::MAX);
+            assert_eq!(screen.snapshot(), before);
+            screen.scroll_down(u16::MAX);
+            assert_eq!(screen.snapshot(), before);
+        }
+    }
 
     mod snapshot {
         use super::*;

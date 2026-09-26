@@ -3,7 +3,9 @@ use std::{iter::Peekable, str::Lines};
 use thiserror::Error;
 use unicode_width::UnicodeWidthStr;
 
-use super::ast::{ActionAst, CursorAst, InputAst, KeyAst, ScenarioAst, StepAst, TerminalAst};
+use super::ast::{
+    ActionAst, CursorAst, InputAst, KeyAst, ScenarioAst, ScrollDirection, StepAst, TerminalAst,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 2_000;
@@ -249,12 +251,38 @@ impl<'a> Parser<'a> {
                     *terminal = self.parse_terminal_declaration("Resize")?;
                     ActionAst::Resize(*terminal)
                 }
+                Some(line) if line.starts_with("Scroll ") => self.parse_scroll()?,
                 _ => break,
             };
             actions.push(action);
         }
 
         Ok(actions)
+    }
+
+    fn parse_scroll(&mut self) -> Result<ActionAst> {
+        let line = self.next_line()?;
+        let value = line
+            .strip_prefix("Scroll ")
+            .ok_or_else(|| self.error_at_current_line("expected `Scroll` declaration"))?;
+        let mut parts = value.split_whitespace();
+        let direction = match parts.next() {
+            Some("up") => ScrollDirection::Up,
+            Some("down") => ScrollDirection::Down,
+            _ => return Err(self.error_at_current_line("expected `up` or `down` after `Scroll`")),
+        };
+        let lines = parts
+            .next()
+            .ok_or_else(|| self.error_at_current_line("expected scroll line count"))?
+            .parse::<u16>()
+            .map_err(|_| self.error_at_current_line("expected scroll line count to be a u16"))?;
+        if lines == 0 {
+            return Err(self.error_at_current_line("scroll line count must be greater than zero"));
+        }
+        if parts.next().is_some() {
+            return Err(self.error_at_current_line("unexpected trailing tokens in `Scroll`"));
+        }
+        Ok(ActionAst::Scroll { direction, lines })
     }
 
     fn parse_input(&mut self) -> Result<InputAst> {
@@ -483,6 +511,45 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use indoc::indoc;
+
+    mod parse_scroll {
+        use super::*;
+
+        #[test]
+        fn parses_direction_and_required_line_count() {
+            for (input, direction, lines) in [
+                ("Scroll up 10", ScrollDirection::Up, 10),
+                ("Scroll down 65535", ScrollDirection::Down, u16::MAX),
+            ] {
+                assert_eq!(
+                    Parser::new(input).parse_scroll().unwrap(),
+                    ActionAst::Scroll { direction, lines }
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_invalid_directions_counts_and_trailing_tokens() {
+            for input in [
+                "Scroll left 1",
+                "Scroll bottom",
+                "Scroll up",
+                "Scroll up 0",
+                "Scroll down -1",
+                "Scroll up 65536",
+                "Scroll up ten",
+                "Scroll up 1 extra",
+            ] {
+                assert!(
+                    matches!(
+                        Parser::new(input).parse_scroll(),
+                        Err(Error::Parse { line: 1, .. })
+                    ),
+                    "{input}"
+                );
+            }
+        }
+    }
 
     mod parse_scenario {
         use super::*;
