@@ -40,6 +40,8 @@ pub struct StepAst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionAst {
     Input(InputAst),
+    /// Paste UTF-8 text wrapped in bracketed-paste delimiters, without Enter.
+    Paste(String),
     /// Wait for a line prefix in raw PTY output, splitting lines at LF bytes.
     WaitBackendLineStartsWith {
         text: String,

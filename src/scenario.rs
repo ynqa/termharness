@@ -87,6 +87,9 @@ fn run_ast_with_session(scenario: &ScenarioAst, session: &mut Session) -> Result
         for action in &step.actions {
             match action {
                 ActionAst::Input(input) => write_input(session, input)?,
+                ActionAst::Paste(text) => {
+                    session.write_input(format!("\x1b[200~{text}\x1b[201~").as_bytes())?;
+                }
                 ActionAst::WaitBackendLineStartsWith { text, timeout_ms } => {
                     wait_for_backend_line_starts_with(
                         session,

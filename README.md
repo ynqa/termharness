@@ -36,6 +36,7 @@ Expect:
 | --- | --- | --- |
 | `Step "label"` | Start a step. | Follow with zero or more actions, then `Settle` and `Expect`. Actions run in the order written without implicit waits. |
 | `Input "text"` | Send text to the application. | Does not append Enter. |
+| `Paste "text"` | Send a bracketed paste, for example `Paste "echo one\necho two"`. | Decodes `\n` (LF), `\r` (CR), `\t` (tab), `\\` (backslash), and `\"` (double quote). Other escapes are errors. Preserves decoded line endings and supports empty text and Unicode. Always wraps the UTF-8 text in `ESC[200~` and `ESC[201~`, without appending Enter. The application should enable bracketed-paste mode; this action does not enable or detect that mode or use the OS clipboard. |
 | `Input <key> [count]` | Send a special key one or more times. | Keys: `left`, `right`, `up`, `down`, `enter`, `backspace`, `tab`, `escape`. Count defaults to 1; range: 1–65535. |
 | `WaitBackendLineStartsWith "text" timeout <ms>ms` | Wait until a Backend line (raw PTY output split at LF bytes) starts with the text. | Text must be nonempty; timeout is required. Includes the unfinished last line; preserves control sequences. Polls every millisecond and fails when the timeout expires. |
 | `WaitFrontendLineStartsWith "text" timeout <ms>ms` | Wait until a visible Frontend line (the emulated terminal screen) starts with the text. | Text must be nonempty; timeout is required. Inspects the current viewport, polling every millisecond; fails when the timeout expires. |
@@ -60,6 +61,6 @@ Expect:
 | `.th` | Plain-text scenario file defining the command, terminal dimensions, actions, and expected screen contents. |
 | `<value>` | A placeholder to replace; do not write the angle brackets. |
 | `[count]` | An optional argument; do not write the square brackets. |
-| `"text"` | A literal double-quoted string on one line. Escape sequences are not interpreted, and embedded double quotes are unsupported. |
+| `"text"` | A double-quoted string written on one physical line. Except in `Paste`, escape sequences are not interpreted and embedded double quotes are unsupported. See the `Paste` row for its supported escapes. |
 | `<ms>ms` | A nonnegative integer duration in milliseconds, such as `100ms`. |
 | Blank lines | Allowed before and between steps, and after the final step. Do not insert them within the header or a step. |

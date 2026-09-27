@@ -241,6 +241,7 @@ impl<'a> Parser<'a> {
         loop {
             let action = match self.peek_line() {
                 Some(line) if line.starts_with("Input ") => ActionAst::Input(self.parse_input()?),
+                Some(line) if line.starts_with("Paste ") => self.parse_paste()?,
                 Some(line) if line.starts_with("WaitBackendLineStartsWith ") => {
                     self.parse_wait_backend_line_starts_with()?
                 }
@@ -258,6 +259,48 @@ impl<'a> Parser<'a> {
         }
 
         Ok(actions)
+    }
+
+    fn parse_paste(&mut self) -> Result<ActionAst> {
+        let line = self.next_line()?;
+        let value = line
+            .strip_prefix("Paste ")
+            .and_then(|value| value.strip_prefix('"'))
+            .ok_or_else(|| self.error_at_current_line("expected quoted paste text"))?;
+        let mut chars = value.chars();
+        let mut text = String::new();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' => {
+                    if !chars.as_str().trim().is_empty() {
+                        return Err(
+                            self.error_at_current_line("unexpected trailing tokens in `Paste`")
+                        );
+                    }
+                    return Ok(ActionAst::Paste(text));
+                }
+                '\\' => {
+                    let escaped = match chars.next() {
+                        Some('n') => '\n',
+                        Some('r') => '\r',
+                        Some('t') => '\t',
+                        Some('\\') => '\\',
+                        Some('"') => '"',
+                        Some(ch) => {
+                            return Err(self.error_at_current_line(format!(
+                                "unsupported paste escape `\\{ch}`"
+                            )));
+                        }
+                        None => {
+                            return Err(self.error_at_current_line("incomplete escape in `Paste`"));
+                        }
+                    };
+                    text.push(escaped);
+                }
+                ch => text.push(ch),
+            }
+        }
+        Err(self.error_at_current_line("expected closing quote for paste text"))
     }
 
     fn parse_scroll(&mut self) -> Result<ActionAst> {
@@ -513,6 +556,102 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use indoc::indoc;
+
+    mod parse_paste {
+        use super::*;
+
+        #[test]
+        fn decodes_supported_escapes_without_normalizing_line_endings() {
+            for (input, expected) in [
+                (r#"Paste "echo one\necho two""#, "echo one\necho two"),
+                (
+                    r#"Paste "one\r\n\r\ntwo\rthree\n""#,
+                    "one\r\n\r\ntwo\rthree\n",
+                ),
+                (r#"Paste "\t\"quoted\" \\n""#, "\t\"quoted\" \\n"),
+                (r#"Paste "日本語 🙂""#, "日本語 🙂"),
+                (r#"Paste """#, ""),
+                (r#"Paste "  spaces  "  "#, "  spaces  "),
+            ] {
+                assert_eq!(
+                    Parser::new(input).parse_paste().unwrap(),
+                    ActionAst::Paste(expected.into()),
+                    "{input}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_invalid_escapes_missing_quotes_and_trailing_tokens() {
+            for input in [
+                "Paste plain",
+                "Paste ",
+                "Paste \"unclosed",
+                "Paste \"trailing\\",
+                r#"Paste "\x1b""#,
+                r#"Paste "\q""#,
+                r#"Paste "one" "two""#,
+                r#"Paste "one" extra"#,
+                "Paste \"one\ntwo\"",
+            ] {
+                assert!(
+                    matches!(
+                        Parser::new(input).parse_paste(),
+                        Err(Error::Parse { line: 1, .. })
+                    ),
+                    "{input}"
+                );
+            }
+        }
+
+        #[test]
+        fn keeps_paste_and_literal_input_distinct_in_action_order() {
+            let scenario = Parser::new(indoc! {r#"
+                Scenario "paste mixed with keys"
+                Command "cat"
+                Terminal rows 1 cols 1
+
+                Step "paste"
+                Input "literal\n"
+                Paste "one\ntwo"
+                Input enter
+                Settle 0ms
+                Expect:
+                  r00 |·|
+            "#})
+            .parse_scenario()
+            .unwrap();
+            assert_eq!(
+                scenario.steps[0].actions,
+                vec![
+                    ActionAst::Input(InputAst::Text(r"literal\n".into())),
+                    ActionAst::Paste("one\ntwo".into()),
+                    ActionAst::Input(InputAst::Key {
+                        key: KeyAst::Enter,
+                        count: 1
+                    }),
+                ]
+            );
+        }
+
+        #[test]
+        fn reports_the_document_line_for_invalid_paste() {
+            let error = Parser::new(indoc! {r#"
+                Scenario "invalid paste"
+                Command "cat"
+                Terminal rows 1 cols 1
+
+                Step "paste"
+                Paste "\q"
+                Settle 0ms
+                Expect:
+                  r00 |·|
+            "#})
+            .parse_scenario()
+            .unwrap_err();
+            assert!(matches!(error, Error::Parse { line: 6, .. }));
+        }
+    }
 
     mod parse_scroll {
         use super::*;
