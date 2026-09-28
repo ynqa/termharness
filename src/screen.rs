@@ -1,14 +1,29 @@
 use alacritty_terminal::{
     Term,
-    event::VoidListener,
+    event::{Event, EventListener},
     grid::Scroll,
     index::{Column, Line, Point},
     term::{Config, cell::Flags, test::TermSize},
     vte::ansi::Processor,
 };
+use std::sync::{Arc, Mutex};
 use unicode_width::UnicodeWidthStr;
 
 use crate::error::{Error, Result};
+
+#[derive(Clone, Default)]
+struct TerminalResponses(Arc<Mutex<Vec<u8>>>);
+
+impl EventListener for TerminalResponses {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(response) = event {
+            self.0
+                .lock()
+                .expect("failed to lock terminal responses")
+                .extend_from_slice(response.as_bytes());
+        }
+    }
+}
 
 /// Pad the given content to fit within the specified number of columns.
 /// e.g. if the content is "Hello" and cols is 10, the result will be "Hello     ".
@@ -30,16 +45,19 @@ fn pad_to_cols(cols: usize, content: &str) -> Result<String> {
 pub struct Screen {
     /// ANSI parser for processing input.
     parser: Processor,
-    terminal: Term<VoidListener>,
+    terminal: Term<TerminalResponses>,
+    responses: TerminalResponses,
 }
 
 impl Screen {
     /// Create a new screen with the given size.
     pub fn new(rows: usize, cols: usize) -> Self {
         let size = TermSize::new(cols, rows);
+        let responses = TerminalResponses::default();
         Self {
             parser: Processor::new(),
-            terminal: Term::new(Config::default(), &size, VoidListener),
+            terminal: Term::new(Config::default(), &size, responses.clone()),
+            responses,
         }
     }
 
@@ -52,7 +70,19 @@ impl Screen {
 
     /// Process bytes as terminal input and update the screen state.
     pub fn process(&mut self, bytes: &[u8]) {
+        let _ = self.process_with_responses(bytes);
+    }
+
+    /// Capture replies at the point each query is parsed, before later output moves the cursor.
+    pub(crate) fn process_with_responses(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.parser.advance(&mut self.terminal, bytes);
+        std::mem::take(
+            &mut *self
+                .responses
+                .0
+                .lock()
+                .expect("failed to lock terminal responses"),
+        )
     }
 
     /// Get the current cursor position as (row, column).
@@ -144,6 +174,35 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod process_with_responses {
+        use super::*;
+
+        #[test]
+        fn replies_are_independent_of_read_boundaries() {
+            let input = b"\x1b[2;3H\x1b[6n\x1b[4;5H\x1b[06n\x1b[1;1H";
+            for boundary in 0..=input.len() {
+                let mut screen = Screen::new(10, 40);
+                let mut replies = screen.process_with_responses(&input[..boundary]);
+                replies.extend(screen.process_with_responses(&input[boundary..]));
+                assert_eq!(replies, b"\x1b[2;3R\x1b[4;5R", "split at {boundary}");
+                assert_eq!(screen.cursor_position(), (0, 0));
+            }
+        }
+
+        #[test]
+        fn canceled_queries_do_not_emit_replies() {
+            let mut screen = Screen::new(10, 40);
+            assert!(screen.process_with_responses(b"\x1b[6\x18n").is_empty());
+        }
+
+        #[test]
+        fn standalone_processing_does_not_retain_replies() {
+            let mut screen = Screen::new(10, 40);
+            screen.process(b"\x1b[6n");
+            assert!(screen.process_with_responses(b"text").is_empty());
+        }
+    }
 
     mod scroll {
         use super::*;

@@ -8,7 +8,6 @@ use portable_pty::{Child, CommandBuilder, MasterPty};
 
 use crate::{
     error::{self, Error, Result},
-    escape_sequence::{self, CURSOR_POSITION_REQUEST_LEN},
     screen::Screen,
 };
 
@@ -78,7 +77,6 @@ impl Session {
 
             thread::spawn(move || {
                 let mut buf = [0u8; 1024];
-                let mut tail = Vec::new();
 
                 loop {
                     match reader.read(&mut buf) {
@@ -91,40 +89,17 @@ impl Session {
                                 .expect("failed to lock output")
                                 .extend_from_slice(chunk);
 
-                            // `tail` keeps the trailing bytes from the previous read so we can detect
-                            // a cursor-position request even when the escape sequence is split across
-                            // read boundaries. `scan` is `tail + chunk`, and after scanning we keep only
-                            // the last `CURSOR_POSITION_REQUEST_LEN - 1` bytes as the next `tail`.
-                            let mut scan = tail;
-                            scan.extend_from_slice(chunk);
-
-                            let cursor_position = {
+                            let responses = {
                                 let mut screen = screen.lock().expect("failed to lock screen");
-                                screen.process(chunk);
-                                screen.cursor_position()
+                                screen.process_with_responses(chunk)
                             };
-
-                            let response_count =
-                                escape_sequence::cursor_position_request_count(&scan);
-                            if response_count > 0 {
-                                let response = escape_sequence::cursor_position_response(
-                                    cursor_position.0 + 1,
-                                    cursor_position.1 + 1,
-                                );
+                            if !responses.is_empty() {
                                 let mut writer = writer.lock().expect("failed to lock writer");
-                                for _ in 0..response_count {
-                                    writer
-                                        .write_all(response.as_bytes())
-                                        .expect("failed to write cursor position response");
-                                }
                                 writer
-                                    .flush()
-                                    .expect("failed to flush cursor position response");
+                                    .write_all(&responses)
+                                    .expect("failed to write terminal responses");
+                                writer.flush().expect("failed to flush terminal responses");
                             }
-
-                            let keep_from =
-                                scan.len().saturating_sub(CURSOR_POSITION_REQUEST_LEN - 1);
-                            tail = scan.split_off(keep_from);
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
@@ -157,6 +132,9 @@ impl Session {
     /// Resizes the terminal. This sends a resize signal
     /// to the child process and updates the screen size.
     pub fn resize(&mut self, rows: usize, cols: usize) -> Result<()> {
+        // SIGWINCH can cause immediate child output. Hold the screen lock until
+        // both the PTY and the model have the new size before parsing that output.
+        let mut screen = self.screen.lock().expect("failed to lock screen");
         self.master
             .resize(portable_pty::PtySize {
                 rows: rows as u16,
@@ -168,10 +146,7 @@ impl Session {
                 message: err.to_string(),
             })?;
 
-        self.screen
-            .lock()
-            .expect("failed to lock screen")
-            .resize(rows, cols);
+        screen.resize(rows, cols);
         Ok(())
     }
 
@@ -266,6 +241,28 @@ mod tests {
             use super::*;
 
             #[test]
+            fn reports_the_position_at_each_request_before_later_cursor_moves() -> Result<()> {
+                let mut cmd = CommandBuilder::new("/bin/bash");
+                cmd.arg("-lc");
+                cmd.arg(
+                    r#"stty -echo -icanon min 1 time 0
+printf '\033[2;3H\033[6n\033[4;5H\033[6n\033[1;1H'
+IFS= read -rsd R -t 2 first
+IFS= read -rsd R -t 2 second
+printf 'REPLIES:%sR%sR' "$first" "$second""#,
+                );
+                let mut session = Session::spawn(cmd, 10, 40, 0, 0)?;
+                session.wait()?;
+                let output = session.output();
+                assert!(
+                    String::from_utf8_lossy(&output).contains("REPLIES:\x1b[2;3R\x1b[4;5R"),
+                    "unexpected replies: {:?}",
+                    String::from_utf8_lossy(&output),
+                );
+                Ok(())
+            }
+
+            #[test]
             fn success() -> Result<()> {
                 let mut cmd = CommandBuilder::new("echo");
                 cmd.arg("Hello, world!");
@@ -355,6 +352,87 @@ mod tests {
 
         mod resize {
             use super::*;
+
+            struct RedrawingPty {
+                screen: Arc<Mutex<Screen>>,
+                pending: Arc<Mutex<Vec<u8>>>,
+            }
+
+            impl MasterPty for RedrawingPty {
+                fn resize(&self, size: portable_pty::PtySize) -> anyhow::Result<()> {
+                    // Schedule child output immediately after its size notification.
+                    // If the reader is blocked, deliver it after resize returns.
+                    let output = format!("\x1b[{};1HNEW", size.rows);
+                    match self.screen.try_lock() {
+                        Ok(mut screen) => screen.process(output.as_bytes()),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            self.pending
+                                .lock()
+                                .unwrap()
+                                .extend_from_slice(output.as_bytes());
+                        }
+                        Err(error) => panic!("screen lock poisoned: {error}"),
+                    }
+                    Ok(())
+                }
+
+                fn get_size(&self) -> anyhow::Result<portable_pty::PtySize> {
+                    unreachable!()
+                }
+
+                fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {
+                    unreachable!()
+                }
+
+                fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
+                    unreachable!()
+                }
+
+                #[cfg(unix)]
+                fn process_group_leader(&self) -> Option<i32> {
+                    None
+                }
+
+                #[cfg(unix)]
+                fn as_raw_fd(&self) -> Option<std::os::fd::RawFd> {
+                    None
+                }
+
+                #[cfg(unix)]
+                fn tty_name(&self) -> Option<std::path::PathBuf> {
+                    None
+                }
+            }
+
+            #[test]
+            fn child_redraw_after_notification_uses_the_new_screen_dimensions() -> Result<()> {
+                let screen = Arc::new(Mutex::new(Screen::new(3, 8)));
+                let pending = Arc::new(Mutex::new(Vec::new()));
+                let mut session = Session {
+                    screen: screen.clone(),
+                    master: Box::new(RedrawingPty {
+                        screen,
+                        pending: pending.clone(),
+                    }),
+                    child: None,
+                    writer: Arc::new(Mutex::new(Box::new(std::io::sink()))),
+                    output: Arc::new(Mutex::new(Vec::new())),
+                    reader_thread: None,
+                };
+                session.resize(6, 8)?;
+                session
+                    .screen
+                    .lock()
+                    .unwrap()
+                    .process(&pending.lock().unwrap());
+                assert_eq!(
+                    session.screen_snapshot(),
+                    vec![
+                        "        ", "        ", "        ", "        ", "        ", "NEW     ",
+                    ]
+                );
+                Ok(())
+            }
 
             #[test]
             fn resize_reflows_wrapped_lines() {

@@ -2,6 +2,14 @@
 
 Terminal application test harness backed by a pseudo-terminal and an ANSI screen model.
 
+Screen contents, scrollback, and resize reflow follow `alacritty_terminal`.
+This is not an exact model of every terminal emulator: terminal-specific extensions
+and GUI behavior require separate validation against the target terminal.
+Sessions return the model's direct terminal replies, including cursor position
+reports, in parser order. A report describes the cursor when the query is parsed,
+even when subsequent output in the same read moves it again. Queries requiring
+external state, such as color and pixel-size requests, are not handled by this path.
+
 ## Example
 
 ```text
