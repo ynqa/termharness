@@ -1,6 +1,6 @@
 [package]
 name = "termharness"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["ynqa <un.pensiero.vano@gmail.com>"]
 edition = "2024"
 description = "Test harness for terminal applications"
